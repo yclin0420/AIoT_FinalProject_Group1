@@ -1,0 +1,114 @@
+import cv2
+import numpy as np
+import threading
+from tkinter import Tk, Label
+from picamera2 import Picamera2
+from ultralytics import YOLO
+
+# ==============================
+# 建立兩個獨立提示框
+# ==============================
+root = Tk()
+root.withdraw()  # 主視窗不顯示
+
+# 環境過暗警示框
+dark_win = Tk()
+dark_win.title("警告")
+dark_win.geometry("600x300+100+300")
+dark_win.configure(bg="red")
+Label(dark_win, text="環境過暗！請開啟車燈！\nWatch out!!!!\nTurn on the lights", font=("Arial", 25,"bold"), fg="white", bg="red").pack(expand=True)
+dark_win.withdraw()
+
+# 行人警示框
+ped_win = Tk()
+ped_win.title("注意行人")
+ped_win.geometry("600x300+1000+300")
+ped_win.configure(bg="orange")
+Label(ped_win, text="注意！前方有行人！\nNTD6000!!!", font=("Arial", 25,"bold"), fg="black", bg="orange").pack(expand=True)
+ped_win.withdraw()
+
+def show_dark():
+    dark_win.deiconify()
+
+def hide_dark():
+    dark_win.withdraw()
+
+def show_ped():
+    ped_win.deiconify()
+
+def hide_ped():
+    ped_win.withdraw()
+
+# ==============================
+# 初始化相機
+# ==============================
+picam2 = Picamera2()
+config = picam2.create_preview_configuration(main={"format": "XBGR8888", "size": (640, 480)})
+picam2.configure(config)
+picam2.start()
+
+# ==============================
+# 載入 YOLO（偵測行人）
+# ==============================
+model = YOLO("yolov8n.pt")  # 官方輕量模型即可偵測 person
+
+# ==============================
+# 偵測線程
+# ==============================
+def detection_loop():
+    dark_alert = False
+    ped_alert = False
+
+    while True:
+        frame = picam2.capture_array()  # RGBA (XBGR8888)
+
+        # ------- 修正成 YOLO 可用格式（RGB） -------
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+        # ------- 計算亮度 -------
+        gray = cv2.cvtColor(rgb_frame, cv2.COLOR_BGR2GRAY)
+        brightness = np.mean(gray)
+
+        # ------- 更新亮度到畫面上 -------
+        cv2.putText(rgb_frame, f"Brightness: {brightness:.2f}",
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8, (0, 255, 0), 2)
+
+        # ------- 光線判斷 -------
+        if brightness < 100:
+            if not dark_alert:
+                dark_alert = True
+                root.after(0, show_dark)
+        else:
+            if dark_alert:
+                dark_alert = False
+                root.after(0, hide_dark)
+
+        # ------- YOLO 行人偵測 -------
+        results = model.predict(rgb_frame, verbose=False)
+
+        found_person = False
+        for box in results[0].boxes:
+            cls = int(box.cls[0])
+            if cls == 0:  # YOLO class 0 = person
+                found_person = True
+                break
+
+        if found_person and not ped_alert:
+            ped_alert = True
+            root.after(0, show_ped)
+        elif not found_person and ped_alert:
+            ped_alert = False
+            root.after(0, hide_ped)
+
+        # ------- 顯示畫面 -------
+        cv2.imshow("Camera", rgb_frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+thread = threading.Thread(target=detection_loop, daemon=True)
+thread.start()
+
+root.mainloop()
+cv2.destroyAllWindows()
