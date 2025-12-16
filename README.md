@@ -1,1 +1,0 @@
-# AIoT_FinalProject_Group1
